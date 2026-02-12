@@ -363,11 +363,6 @@
     const botY = cup.y + cup.h/2;
     const liquidTop = botY - cup.h * drink.level;
 
-    const onFloor = (p.y >= (botY - cup.wall*0.8 - p.r - 0.5));
-    if (onFloor) {
-      p.vx *= 0.88; // 바닥 마찰(0.85~0.93)
-    }
-    
     for (const p of toppings){
       p.vx += gX;
       p.vy += gY;
@@ -377,12 +372,18 @@
 
       p.x += p.vx;
       p.y += p.vy;
-
+      
       if (p.y > botY - cup.wall*0.8 - p.r){
         p.y = botY - cup.wall*0.8 - p.r;
         p.vy *= -0.35;
         p.vx *= 0.85;
       }
+
+      const onFloor = (p.y >= (botY - cup.wall*0.8 - p.r - 0.5));
+      if (onFloor) {
+        p.vx *= 0.88; // 바닥 마찰(0.85~0.93)
+      }
+      
       if (p.y < topY + cup.wall*1.4 + p.r){
         p.y = topY + cup.wall*1.4 + p.r;
         p.vy *= -0.20;
@@ -494,5 +495,6 @@
 </script>
 </body>
 </html>
+
 
 
