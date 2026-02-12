@@ -1,161 +1,250 @@
 <!doctype html>
 <html lang="ko">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
-  <title>WebGL Load Test</title>
-  <style>
-    html,body{margin:0;height:100%;background:#111;}
-    #gl{position:absolute;inset:0;width:100%;height:100%;}
-    #hud{
-      position:fixed;left:12px;top:12px;right:12px;
-      padding:10px 12px;border-radius:12px;
-      background:rgba(0,0,0,0.55);
-      color:#fff;font:600 16px -apple-system,system-ui;
-      z-index:10;
-      white-space:pre-line;
-    }
-  </style>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>WebGL Blob Stage</title>
+<style>
+html,body{margin:0;height:100%;background:#0b0f14;}
+#gl{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+}
+#hud{
+  position:fixed;
+  left:12px;top:12px;
+  padding:10px 14px;
+  background:rgba(0,0,0,0.55);
+  color:#fff;
+  border-radius:12px;
+  font:600 14px -apple-system,system-ui;
+  z-index:10;
+}
+</style>
 </head>
 <body>
-  <div id="hud">Loading…</div>
-  <canvas id="gl"></canvas>
+<div id="hud">Initializing...</div>
+<canvas id="gl"></canvas>
 
 <script>
 (() => {
-  const hud = document.getElementById("hud");
-  const canvas = document.getElementById("gl");
 
-  function say(msg){ hud.textContent = msg; }
-  window.addEventListener("error", (e) => say("ERROR ❌\n" + (e.message || "unknown error")));
-  window.addEventListener("unhandledrejection", (e) => say("PROMISE ERROR ❌\n" + (e.reason?.message || String(e.reason))));
+const hud = document.getElementById("hud");
+const canvas = document.getElementById("gl");
+const gl = canvas.getContext("webgl",{alpha:false,antialias:false});
 
-  function resize(){
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width  = Math.max(1, Math.floor(innerWidth  * dpr));
-    canvas.height = Math.max(1, Math.floor(innerHeight * dpr));
+function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+
+function resize(){
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = innerWidth * dpr;
+  canvas.height = innerHeight * dpr;
+  gl.viewport(0,0,canvas.width,canvas.height);
+}
+addEventListener("resize",resize);
+resize();
+
+if(!gl){
+  hud.textContent="WebGL 실패 ❌";
+  return;
+}
+
+// ===================
+// Shader
+// ===================
+const vs = `
+attribute vec2 aPos;
+uniform float uSize;
+void main(){
+  gl_Position = vec4(aPos,0.0,1.0);
+  gl_PointSize = uSize;
+}`;
+
+const fs = `
+precision mediump float;
+uniform vec4 uColor;
+void main(){
+  vec2 p = gl_PointCoord - vec2(0.5);
+  float d = length(p);
+  if(d>0.5) discard;
+  float alpha = smoothstep(0.5,0.05,d) * uColor.a;
+  gl_FragColor = vec4(uColor.rgb, alpha);
+}`;
+
+function compile(type,src){
+  const s = gl.createShader(type);
+  gl.shaderSource(s,src);
+  gl.compileShader(s);
+  return s;
+}
+
+const prog = gl.createProgram();
+gl.attachShader(prog,compile(gl.VERTEX_SHADER,vs));
+gl.attachShader(prog,compile(gl.FRAGMENT_SHADER,fs));
+gl.linkProgram(prog);
+gl.useProgram(prog);
+
+const aPos = gl.getAttribLocation(prog,"aPos");
+const uSize = gl.getUniformLocation(prog,"uSize");
+const uColor = gl.getUniformLocation(prog,"uColor");
+
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+gl.enableVertexAttribArray(aPos);
+gl.vertexAttribPointer(aPos,2,gl.FLOAT,false,0,0);
+
+gl.enable(gl.BLEND);
+gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+
+// ===================
+// Particles
+// ===================
+const N = 900;
+const pos = new Float32Array(N*2);
+const vel = new Float32Array(N*2);
+
+for(let i=0;i<N;i++){
+  pos[i*2]   = Math.random()*1.4 - 0.7;
+  pos[i*2+1] = Math.random()*1.2 - 0.6;
+  vel[i*2]   = 0;
+  vel[i*2+1] = 0;
+}
+
+// ===================
+// Uniform Grid
+// ===================
+const cellSize = 0.12;
+const gridW = Math.ceil(2/cellSize);
+const gridH = Math.ceil(2/cellSize);
+const head = new Int32Array(gridW*gridH);
+const next = new Int32Array(N);
+
+function gridIndex(x,y){
+  const ix = clamp(Math.floor((x+1)/cellSize),0,gridW-1);
+  const iy = clamp(Math.floor((y+1)/cellSize),0,gridH-1);
+  return iy*gridW+ix;
+}
+
+// ===================
+// Physics
+// ===================
+let last = performance.now();
+
+function loop(now){
+
+  const dt = Math.min(0.033,(now-last)/1000);
+  last = now;
+
+  gl.clearColor(0.06,0.08,0.10,1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+
+  // Build grid
+  head.fill(-1);
+  for(let i=0;i<N;i++){
+    const gi = gridIndex(pos[i*2],pos[i*2+1]);
+    next[i] = head[gi];
+    head[gi] = i;
   }
-  addEventListener("resize", resize);
-  resize();
 
-  const gl = canvas.getContext("webgl", {alpha:false, antialias:false});
-  if(!gl){ say("LOADED ✅\nWebGL 컨텍스트 실패"); return; }
-
-  // ---- shader: 큰 원형 파티클 ----
-  const vs = `
-  attribute vec2 aPos;
-  uniform float uPointSize;
-  void main(){
-    gl_Position = vec4(aPos, 0.0, 1.0);   // aPos는 이미 clip space(-1..1)
-    gl_PointSize = uPointSize;
-  }`;
-  const fs = `
-  precision mediump float;
-  uniform vec4 uColor;
-  void main(){
-    vec2 p = gl_PointCoord - vec2(0.5);
-    float d = length(p);
-    if(d > 0.5) discard;                  // 원으로 자르기
-    // 중심은 더 진하게(살짝 그라데이션)
-    float a = smoothstep(0.5, 0.1, d) * uColor.a;
-    gl_FragColor = vec4(uColor.rgb, a);
-  }`;
-
-  function compile(type, src){
-    const s = gl.createShader(type);
-    gl.shaderSource(s, src);
-    gl.compileShader(s);
-    if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)){
-      throw new Error(gl.getShaderInfoLog(s));
-    }
-    return s;
-  }
-  const prog = gl.createProgram();
-  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vs));
-  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fs));
-  gl.linkProgram(prog);
-  if(!gl.getProgramParameter(prog, gl.LINK_STATUS)){
-    throw new Error(gl.getProgramInfoLog(prog));
-  }
-  gl.useProgram(prog);
-
-  const aPos = gl.getAttribLocation(prog, "aPos");
-  const uPointSize = gl.getUniformLocation(prog, "uPointSize");
-  const uColor = gl.getUniformLocation(prog, "uColor");
-
-  // ---- particles (clip space -1..1) ----
-  const N = 300;
-  const pos = new Float32Array(N * 2);
-  const vel = new Float32Array(N * 2);
+  const cohR=0.22;
+  const sepR=0.06;
+  const cohK=0.55;
+  const sepK=1.4;
+  const maxF=2.0;
 
   for(let i=0;i<N;i++){
-    pos[i*2]   = (Math.random()*1.6 - 0.8); // -0.8..0.8
-    pos[i*2+1] = (Math.random()*1.2 - 0.6); // -0.6..0.6
-    vel[i*2]   = (Math.random()*0.4 - 0.2);
-    vel[i*2+1] = (Math.random()*0.4 - 0.2);
-  }
 
-  const buf = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-  gl.enableVertexAttribArray(aPos);
-  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+    let x = pos[i*2];
+    let y = pos[i*2+1];
+    let vx = vel[i*2];
+    let vy = vel[i*2+1];
 
-  // 블롭 느낌(겹치면 진해지도록)
-  gl.enable(gl.BLEND);
-  gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // additive
+    let ax=0, ay=0;
+    let cx=0, cy=0, cnt=0;
 
-  let t0 = performance.now();
-  function loop(now){
-    const t = (now - t0)/1000;
-    gl.viewport(0,0,canvas.width,canvas.height);
+    const gi0 = gridIndex(x,y);
+    const gx0 = gi0 % gridW;
+    const gy0 = (gi0 / gridW)|0;
 
-    // 배경
-    gl.clearColor(0.07,0.08,0.10,1);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    for(let oy=-1;oy<=1;oy++){
+      for(let ox=-1;ox<=1;ox++){
+        const gx = gx0+ox;
+        const gy = gy0+oy;
+        if(gx<0||gx>=gridW||gy<0||gy>=gridH) continue;
 
-    // 업데이트
-    const dt = 1/60;
-    const ax = 0.0;
-    const ay = -0.18; // 위로 갈수록 y가 커지는 clip space라서 "아래"는 음수 방향
+        let j = head[gy*gridW+gx];
+        while(j!=-1){
+          if(j!=i){
+            const dx = pos[j*2]-x;
+            const dy = pos[j*2+1]-y;
+            const d2 = dx*dx+dy*dy;
 
-    for(let i=0;i<N;i++){
-      let x = pos[i*2], y = pos[i*2+1];
-      let vx = vel[i*2], vy = vel[i*2+1];
+            if(d2 < cohR*cohR){
+              cx+=pos[j*2];
+              cy+=pos[j*2+1];
+              cnt++;
+            }
 
-      vx += ax * dt;
-      vy += ay * dt;
-      vx *= 0.995;
-      vy *= 0.995;
-
-      x += vx * dt * 2.5;
-      y += vy * dt * 2.5;
-
-      // 화면 경계 튕김
-      if(x < -0.95){ x=-0.95; vx*=-0.85; }
-      if(x >  0.95){ x= 0.95; vx*=-0.85; }
-      if(y < -0.95){ y=-0.95; vy*=-0.85; }
-      if(y >  0.95){ y= 0.95; vy*=-0.85; }
-
-      pos[i*2]=x; pos[i*2+1]=y;
-      vel[i*2]=vx; vel[i*2+1]=vy;
+            if(d2>1e-6 && d2 < sepR*sepR){
+              const d=Math.sqrt(d2);
+              const push=(sepR-d)/sepR;
+              ax -= (dx/d)*push*sepK;
+              ay -= (dy/d)*push*sepK;
+            }
+          }
+          j=next[j];
+        }
+      }
     }
 
-    // 그리기
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, pos, gl.DYNAMIC_DRAW);
+    if(cnt>0){
+      const mx=cx/cnt;
+      const my=cy/cnt;
+      ax += (mx-x)*cohK;
+      ay += (my-y)*cohK;
+    }
 
-    gl.uniform1f(uPointSize, Math.max(10, Math.min(34, canvas.width/35)));
-    gl.uniform4f(uColor, 0.82, 0.55, 0.45, 0.35);
+    ax=clamp(ax,-maxF,maxF);
+    ay=clamp(ay,-maxF,maxF);
 
-    gl.drawArrays(gl.POINTS, 0, N);
+    vx+=ax*dt*0.6;
+    vy+=ay*dt*0.6;
 
-    say(`STAGE 1 ✅ particles visible\nN=${N}  t=${t.toFixed(2)}s\n(보이면 다음 단계로 진행)`);
+    vx*=0.995;
+    vy*=0.995;
 
-    requestAnimationFrame(loop);
+    x+=vx*dt*2.5;
+    y+=vy*dt*2.5;
+
+    if(x<-0.95){x=-0.95;vx*=-0.85;}
+    if(x>0.95){x=0.95;vx*=-0.85;}
+    if(y<-0.95){y=-0.95;vy*=-0.85;}
+    if(y>0.95){y=0.95;vy*=-0.85;}
+
+    pos[i*2]=x;
+    pos[i*2+1]=y;
+    vel[i*2]=vx;
+    vel[i*2+1]=vy;
   }
+
+  gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+  gl.bufferData(gl.ARRAY_BUFFER,pos,gl.DYNAMIC_DRAW);
+
+  gl.uniform1f(uSize, Math.max(24, Math.min(70, canvas.width/18)));
+  gl.uniform4f(uColor, 0.82,0.55,0.45,0.18);
+
+  gl.drawArrays(gl.POINTS,0,N);
+
+  hud.textContent="Blob Simulation ✅  (응집+분리 적용)";
+
   requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+
 })();
 </script>
 </body>
 </html>
-
