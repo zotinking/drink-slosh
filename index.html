@@ -28,9 +28,7 @@
   <div class="topbar">
     <div>
       <div class="title">Drink Slosh (iOS Test)</div>
-      <div class="hint">
-        Play → 모션 권한. 기본(책상 위)에서는 마시지 않음. 얼굴 앞(대략 수직)에서 화면 수직축(yaw) 회전 시 마시기.
-      </div>
+      <div class="hint">Play → 모션 권한. 폰을 화면 수직축으로 시계방향 회전하면 표면은 반시계방향으로 동일각 회전(지면 수평 유지).</div>
     </div>
     <button id="playBtn" class="btn">Play</button>
   </div>
@@ -40,8 +38,8 @@
   </div>
 
   <div class="footer">
-    <span class="pill">기울이기: 슬로싱</span>
-    <span class="pill">얼굴 앞(수직) + yaw 회전: 마시기</span>
+    <span class="pill">중력(기울기): 토핑 이동</span>
+    <span class="pill">yaw(각도): 표면 각도 = -yaw</span>
     <span class="pill">Play는 권한/오디오 트리거</span>
   </div>
 </div>
@@ -50,7 +48,6 @@
 (() => {
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
-
   const W = canvas.width, H = canvas.height;
   const cx = W/2, cy = H/2;
 
@@ -65,9 +62,19 @@
   const toppings = [];
   const TOPPING_COUNT = 38;
 
-  function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+  // ---------- utils ----------
+  const TAU = Math.PI * 2;
+  function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+  function rgba(c,a){ return `rgba(${c.r},${c.g},${c.b},${a})`; }
+  function wrapRad(x){
+    // wrap to [-pi, pi]
+    x = (x + Math.PI) % (Math.PI*2);
+    if (x < 0) x += Math.PI*2;
+    return x - Math.PI;
+  }
+  function degToRad(d){ return d * Math.PI / 180; }
 
-  function resetToppings() {
+  function resetToppings(){
     toppings.length = 0;
     for (let i=0;i<TOPPING_COUNT;i++){
       toppings.push({
@@ -82,55 +89,47 @@
   }
   resetToppings();
 
-  // ---------------- Motion input ----------------
-  // Slosh uses gravity tilt (LR mainly). Sip uses "upright gate + yaw rotation rate".
-  let tiltLR = 0;      // -1..1
-  let tiltFB = 0;      // -1..1 (슬로싱/보조용)
-  let gzN = 1;         // gravity z normalized (-1..1). |gzN|~1 => face-up/down, ~0 => vertical-ish
-  let yawRateAlpha = 0; // deg/s (from rotationRate.alpha), smoothed
+  // ---------- sensors ----------
+  // Gravity tilt (for toppings)
+  let tiltLR = 0; // -1..1
+  let tiltFB = 0; // -1..1
   let hasMotion = false;
 
-  function handleMotion(e){
-    const g = e.accelerationIncludingGravity;
-    if (g) {
-      const gx = (typeof g.x === "number") ? g.x : 0;
-      const gy = (typeof g.y === "number") ? g.y : 0;
-      const gz = (typeof g.z === "number") ? g.z : 0;
+  // Yaw angle (for surface): use DeviceOrientation alpha with baseline offset
+  let yaw0 = null;          // baseline alpha(rad) at Play
+  let yawRad = 0;           // current yaw relative to yaw0 (rad)
+  let surfaceTheta = 0;     // actual used surface direction angle (rad)
+  let surfaceThetaVel = 0;  // smoothing
+  const thetaStiff = 18.0;  // spring stiffness
+  const thetaDamp  = 0.82;  // damping
 
-      tiltLR = clamp((-gx) / 9.81, -1, 1);
-      tiltFB = clamp((gy) / 9.81, -1, 1);
-      gzN    = clamp((gz) / 9.81, -1, 1);
-
-      hasMotion = true;
-    }
-
-    // rotationRate for yaw-trigger sipping
-    // iOS: rotationRate.alpha is "rate around z axis" in deg/s (commonly).
-    // Some devices may provide null; then yawRateAlpha stays ~0 (no sip).
-    const rr = e.rotationRate;
-    const rawAlpha = (rr && typeof rr.alpha === "number") ? rr.alpha : 0;
-
-    // Smooth to avoid jitter
-    yawRateAlpha = yawRateAlpha * 0.85 + rawAlpha * 0.15;
-  }
-
-  // ---------------- Slosh model ----------------
-  let surfaceAngle = 0;
-  let surfaceVel   = 0;
-  const stiffness = 0.09;
-  const damping   = 0.88;
-
+  // wave
   let wavePhase = 0;
   let waveAmp = 0;
 
-  // ---------------- Sip effect ----------------
-  let sipping = false;
-  let sipStrength = 0;
-  let sipCooldown = 0;
+  function handleMotion(e){
+    const g = e.accelerationIncludingGravity;
+    if (!g) return;
 
-  // ---------------- Audio ----------------
+    const gx = (typeof g.x === "number") ? g.x : 0;
+    const gy = (typeof g.y === "number") ? g.y : 0;
+
+    tiltLR = clamp((-gx)/9.81, -1, 1);
+    tiltFB = clamp((gy)/9.81, -1, 1);
+    hasMotion = true;
+  }
+
+  function handleOrientation(e){
+    // alpha: 0..360 degrees (yaw-ish)
+    if (typeof e.alpha !== "number") return;
+    const a = degToRad(e.alpha);
+
+    if (yaw0 === null) yaw0 = a; // capture baseline after Play
+    yawRad = wrapRad(a - yaw0);
+  }
+
+  // ---------- audio (optional beep) ----------
   let audioCtx = null;
-
   function beepSip(intensity){
     if (!audioCtx) return;
     const t0 = audioCtx.currentTime;
@@ -145,26 +144,24 @@
     osc.frequency.setValueAtTime(260 + 120*intensity, t0);
 
     gain.gain.setValueAtTime(0.0001, t0);
-    gain.gain.exponentialRampToValueAtTime(0.10 + 0.08*intensity, t0 + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.22);
+    gain.gain.exponentialRampToValueAtTime(0.08 + 0.06*intensity, t0 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.18);
 
     osc.connect(filt).connect(gain).connect(audioCtx.destination);
     osc.start(t0);
-    osc.stop(t0 + 0.25);
+    osc.stop(t0 + 0.2);
   }
 
-  // ---------------- Cup geometry helpers ----------------
+  // ---------- cup geometry helpers ----------
   function cupWidthAt(y){
     const t = clamp(y / cup.h, 0, 1);
     return cup.topW + (cup.botW - cup.topW) * t;
   }
-
   function cupXBoundsAt(yAbs){
     const y = yAbs - (cup.y - cup.h/2);
     const w = cupWidthAt(y);
     return { left: cup.x - w/2, right: cup.x + w/2 };
   }
-
   function insideCup(x, y){
     const topY = cup.y - cup.h/2;
     const botY = cup.y + cup.h/2;
@@ -174,9 +171,7 @@
     return (x > b.left + margin && x < b.right - margin);
   }
 
-  function rgba(c, a){ return `rgba(${c.r},${c.g},${c.b},${a})`; }
-
-  // ---------------- Drawing ----------------
+  // ---------- drawing ----------
   function drawCup(){
     const topY = cup.y - cup.h/2;
     const botY = cup.y + cup.h/2;
@@ -205,13 +200,15 @@
     ctx.restore();
   }
 
+  // 핵심: 각도 기반 표면(0~90°에서도 안정)
   function drawLiquid(){
     const topY = cup.y - cup.h/2;
     const botY = cup.y + cup.h/2;
     const liquidTop = botY - cup.h * drink.level;
 
     ctx.save();
-    // Clip to inside cup
+
+    // clip to inside cup
     ctx.beginPath();
     ctx.moveTo(cup.x - cup.topW/2 + cup.wall, topY + cup.wall);
     ctx.lineTo(cup.x - cup.botW/2 + cup.wall, botY - cup.wall);
@@ -221,46 +218,72 @@
     ctx.closePath();
     ctx.clip();
 
-    // Surface-shaped fill
     ctx.fillStyle = rgba(drink.color, 0.92);
 
-    const slope = surfaceAngle * 0.9;
-    const surfaceMidY = liquidTop;
-    const amp = 16 + 26*waveAmp;
+    // 표면 "방향" 각도 theta:
+    // 요구사항: phone CW +90 => surface CCW +90 => surfaceTheta = -yaw
+    const theta = surfaceTheta;
 
-    const leftX  = cupXBoundsAt(surfaceMidY).left + cup.wall*0.6;
-    const rightX = cupXBoundsAt(surfaceMidY).right - cup.wall*0.6;
+    // direction vector along surface line
+    const dx = Math.cos(theta);
+    const dy = Math.sin(theta);
+    // normal vector (perpendicular)
+    const nx = -dy;
+    const ny = dx;
 
-    const N = 36;
+    const amp = 12 + 22 * waveAmp;
+    const midX = cup.x;
+    const midY = liquidTop;
+
+    // choose length enough to span the cup; clip will cut it
+    const span = Math.max(cup.topW, cup.h) * 0.9;
+
+    const N = 44;
     ctx.beginPath();
     for (let i=0;i<=N;i++){
-      const t = i / N;
-      const x = leftX + (rightX - leftX) * t;
-      const wave = Math.sin(wavePhase + t*2.2) * amp;
-      const y = surfaceMidY + slope * (x - (leftX+rightX)/2) + wave;
+      const t = i / N;                 // 0..1
+      const s = (t - 0.5) * 2 * span;  // -span..+span
+
+      // base point on the line
+      let x = midX + dx * s;
+      let y = midY + dy * s;
+
+      // wave offset along normal direction
+      const w = Math.sin(wavePhase + t*2.6) * amp;
+      x += nx * w;
+      y += ny * w;
+
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
-    ctx.lineTo(rightX, botY + 200);
-    ctx.lineTo(leftX,  botY + 200);
+
+    // close far down so it fills "below surface" regardless of angle
+    ctx.lineTo(W + 1000, botY + 3000);
+    ctx.lineTo(-1000, botY + 3000);
     ctx.closePath();
     ctx.fill();
 
-    // Surface highlight (same curve)
+    // highlight along same curve
     ctx.strokeStyle = "rgba(255,255,255,0.35)";
     ctx.lineWidth = 6;
     ctx.beginPath();
     for (let i=0;i<=N;i++){
       const t = i / N;
-      const x = leftX + (rightX - leftX) * t;
-      const wave = Math.sin(wavePhase + t*2.2) * amp;
-      const y = surfaceMidY + slope * (x - (leftX+rightX)/2) + wave;
+      const s = (t - 0.5) * 2 * span;
+
+      let x = midX + dx * s;
+      let y = midY + dy * s;
+
+      const w = Math.sin(wavePhase + t*2.6) * amp;
+      x += nx * w;
+      y += ny * w;
+
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
 
-    // Shine overlay
+    // shine overlay
     const grad = ctx.createLinearGradient(cup.x - 200, topY, cup.x + 220, botY);
     grad.addColorStop(0, "rgba(255,255,255,0.10)");
     grad.addColorStop(0.5, "rgba(255,255,255,0.00)");
@@ -289,7 +312,6 @@
   function drawToppings(){
     const botY = cup.y + cup.h/2;
     const liquidTop = botY - cup.h * drink.level;
-
     const sorted = [...toppings].sort((a,b)=> (a.kind==="jelly") - (b.kind==="jelly"));
 
     for (const p of sorted){
@@ -315,55 +337,26 @@
     }
   }
 
-  // ---------------- Update loop ----------------
+  // ---------- update ----------
   function update(dt){
-    // Slosh (gravity-based)
-    const target = tiltLR * 0.55;
-    const force = (target - surfaceAngle) * stiffness;
-    surfaceVel += force;
-    surfaceVel *= damping;
-    surfaceAngle += surfaceVel;
+    // 1) surface angle target: -yaw (요구사항 그대로)
+    const targetTheta = -yawRad; // CW phone -> CCW surface
+    const err = wrapRad(targetTheta - surfaceTheta);
+    // spring smoothing
+    surfaceThetaVel += err * thetaStiff * dt;
+    surfaceThetaVel *= Math.pow(thetaDamp, dt*60);
+    surfaceTheta += surfaceThetaVel * dt;
+    surfaceTheta = wrapRad(surfaceTheta);
 
-    wavePhase += 2.1 * dt;
-    waveAmp = clamp(waveAmp * 0.94 + Math.abs(surfaceVel) * 2.2, 0, 1);
+    // wave: 조금만
+    wavePhase += 2.0 * dt;
+    waveAmp = clamp(waveAmp * 0.92 + Math.min(1, Math.abs(surfaceThetaVel) * 0.8), 0, 1);
 
-    // ---- Sip trigger (NEW):
-    // - Base state: phone face-up on desk => |gzN| ~ 1  => NOT sipping
-    // - When lifted to face (roughly vertical) => |gzN| near 0 => "upright gate" open
-    // - Sip when yaw rotation happens while gate open (use rotationRate.alpha)
-    const uprightGate = (Math.abs(gzN) < 0.35); // ~ vertical-ish. tweak 0.25~0.45 if needed.
-
-    // yawRateAlpha: deg/s. Use magnitude; allow both CW/CCW.
-    const yawRate = Math.abs(yawRateAlpha);
-
-    // threshold: start sipping only when yaw rotation is noticeable.
-    // tweak 25~60 based on feel.
-    const sipNow = uprightGate && (yawRate > 35) && (drink.level > 0.06);
-
-    if (sipCooldown > 0) sipCooldown -= dt;
-
-    const allowSip = sipNow && sipCooldown <= 0;
-
-    if (allowSip){
-      sipping = true;
-      // Strength scales with yaw rate (clamped)
-      const rateNorm = clamp((yawRate - 35) / 120, 0, 1);
-      sipStrength = clamp(sipStrength + dt * (2.0 + 3.0*rateNorm), 0, 1);
-
-      // Drain speed depends on sipStrength
-      drink.targetLevel = Math.max(0.05, drink.targetLevel - dt * 0.14 * (0.25 + 0.75*sipStrength));
-
-      if (audioCtx && Math.random() < 0.08) beepSip(0.6 + 0.4*sipStrength);
-    } else {
-      sipping = false;
-      sipStrength = Math.max(0, sipStrength - dt*2.2);
-    }
-
-    // Smooth approach target level
+    // 2) level (테스트용: 감소 없음)
     drink.level += (drink.targetLevel - drink.level) * (1 - Math.pow(0.0008, dt));
 
-    // Toppings physics
-    const gX = tiltLR * 0.50;
+    // 3) toppings: gravity tilt로만 (표면 회전과 독립)
+    const gX = tiltLR * 0.55;
     const gY = 0.22;
 
     const topY = cup.y - cup.h/2;
@@ -374,42 +367,29 @@
       p.vx += gX;
       p.vy += gY;
 
-      // slosh drift
-      p.vx += surfaceVel * 0.9;
-
       p.vx *= 0.96;
       p.vy *= 0.96;
 
       p.x += p.vx;
       p.y += p.vy;
 
-      // bottom collision
       if (p.y > botY - cup.wall*0.8 - p.r){
         p.y = botY - cup.wall*0.8 - p.r;
         p.vy *= -0.35;
         p.vx *= 0.85;
       }
-      // top clamp
       if (p.y < topY + cup.wall*1.4 + p.r){
         p.y = topY + cup.wall*1.4 + p.r;
         p.vy *= -0.20;
       }
 
-      // side walls
       const bounds = cupXBoundsAt(p.y);
       const left = bounds.left + cup.wall*1.0 + p.r;
       const right = bounds.right - cup.wall*1.0 - p.r;
 
-      if (p.x < left){
-        p.x = left;
-        p.vx *= -0.35;
-      }
-      if (p.x > right){
-        p.x = right;
-        p.vx *= -0.35;
-      }
+      if (p.x < left){ p.x = left; p.vx *= -0.35; }
+      if (p.x > right){ p.x = right; p.vx *= -0.35; }
 
-      // keep near liquid
       if (p.y < liquidTop + 30){
         p.vy += 0.6;
       }
@@ -419,7 +399,7 @@
   function render(){
     ctx.clearRect(0,0,W,H);
 
-    // Background glow
+    // background glow
     ctx.save();
     const bg = ctx.createRadialGradient(cx, cy-200, 40, cx, cy, 820);
     bg.addColorStop(0, "rgba(80,120,255,0.10)");
@@ -433,40 +413,29 @@
     drawToppings();
     drawCup();
 
-    // Status text
+    // status
     ctx.save();
     ctx.fillStyle = "rgba(255,255,255,0.75)";
     ctx.font = "24px -apple-system, system-ui, Segoe UI, Roboto, sans-serif";
-    const msg1 = hasMotion ? "기울여 보세요 (슬로싱)" : "Play 후 모션 허용 필요";
-    ctx.fillText(msg1, 40, 64);
+    ctx.fillText(hasMotion ? "기울여 보세요 (토핑 이동)" : "Play 후 모션 허용 필요", 40, 64);
 
     ctx.fillStyle = "rgba(255,255,255,0.55)";
     ctx.font = "20px -apple-system, system-ui, Segoe UI, Roboto, sans-serif";
-    ctx.fillText(`레벨: ${Math.round(drink.level*100)}%`, 40, 96);
-
-    // Debug-ish (optional)
-    const uprightGate = (Math.abs(gzN) < 0.35);
-    ctx.fillText(`수직게이트: ${uprightGate ? "ON" : "OFF"} | yawRate: ${Math.round(Math.abs(yawRateAlpha))}°/s`, 40, 126);
-
-    if (sipping){
-      ctx.fillStyle = "rgba(255,255,255,0.85)";
-      ctx.font = "700 26px -apple-system, system-ui, Segoe UI, Roboto, sans-serif";
-      ctx.fillText("마시는 중…", 40, 162);
-    }
+    ctx.fillText(`레벨: ${Math.round(drink.level*100)}% | yaw: ${Math.round(yawRad*180/Math.PI)}° | surface: ${Math.round(surfaceTheta*180/Math.PI)}°`, 40, 96);
     ctx.restore();
   }
 
-  // ---------------- RAF loop ----------------
+  // ---------- raf ----------
   let last = performance.now();
   function loop(now){
-    const dt = Math.min(0.05, (now - last) / 1000);
+    const dt = Math.min(0.05, (now - last)/1000);
     last = now;
     update(dt);
     render();
     requestAnimationFrame(loop);
   }
 
-  // ---------------- Permission / start ----------------
+  // ---------- permission / start ----------
   async function requestMotion(){
     const DOE = window.DeviceOrientationEvent;
     const DME = window.DeviceMotionEvent;
@@ -476,7 +445,6 @@
            : null;
 
     if (!fn) return true;
-
     const res = await fn.call(DOE || DME);
     return res === "granted";
   }
@@ -489,26 +457,24 @@
 
     try{
       const ok = await requestMotion();
-      if (!ok){
-        alert("모션 권한이 거부되어 동작이 제한됩니다. (설정에서 허용 필요)");
-      }
-    }catch(err){
-      // still attempt
-    }
+      if (!ok) alert("모션 권한이 거부되어 일부 동작이 제한됩니다.");
+    } catch(e){}
 
+    // listen both: motion(for gravity) + orientation(for yaw angle)
     window.addEventListener("devicemotion", handleMotion, true);
+    window.addEventListener("deviceorientation", handleOrientation, true);
 
-    // Reset state
+    // reset yaw baseline at start
+    yaw0 = null;
+    yawRad = 0;
+    surfaceTheta = 0;
+    surfaceThetaVel = 0;
+
     drink.level = 0.78;
     drink.targetLevel = 0.78;
-    surfaceAngle = 0;
-    surfaceVel = 0;
     waveAmp = 0;
-    sipCooldown = 0.25;
-    yawRateAlpha = 0;
-    gzN = 1;
-    hasMotion = false;
     resetToppings();
+    hasMotion = false;
 
     if (!start._started){
       start._started = true;
@@ -518,9 +484,7 @@
     beepSip(0.2);
   }
 
-  document.getElementById("playBtn").addEventListener("click", async () => {
-    await start();
-  });
+  document.getElementById("playBtn").addEventListener("click", start);
 })();
 </script>
 </body>
