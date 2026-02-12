@@ -106,6 +106,8 @@
   // wave
   let wavePhase = 0;
   let waveAmp = 0;
+  let overflowX = null;
+  let overflowAmt = 0;
 
   function handleMotion(e){
     const g = e.accelerationIncludingGravity;
@@ -355,6 +357,59 @@
     // 2) level (테스트용: 감소 없음)
     drink.level += (drink.targetLevel - drink.level) * (1 - Math.pow(0.0008, dt));
 
+
+    // --- overflow detection + drain (mouth open) ---
+    const topY = cup.y - cup.h/2;
+    const botY = cup.y + cup.h/2;
+    
+    // "입구(림) 기준 높이" : 너무 위/아래면 튜닝하세요(약간 아래가 자연스러움)
+    const rimY = topY + cup.wall * 0.9;
+    
+    // 표면 곡선을 샘플링해서 rimY 보다 위로 올라간 부분이 있으면 overflowAmt 증가
+    const theta = surfaceTheta;
+    const dx = Math.cos(theta), dy = Math.sin(theta);
+    const nx = -dy, ny = dx;
+    
+    const midX = cup.x;
+    const midY = botY - cup.h * drink.level;
+    
+    const span = Math.max(cup.topW, cup.h) * 0.9;
+    const N = 40;
+    
+    let overSum = 0;
+    let overMinY = Infinity;
+    let overX = null;
+    
+    for (let i=0;i<=N;i++){
+      const t = i / N;
+      const s = (t - 0.5) * 2 * span;
+    
+      // drawLiquid과 동일한 표면 위치 계산(파형은 여기선 단순화/또는 wavePhase 사용)
+      const amp = 12 + 22 * waveAmp;
+      const w = Math.sin(wavePhase + t*2.6) * amp;
+    
+      const x = midX + dx*s + nx*w;
+      const y = midY + dy*s + ny*w;
+    
+      if (y < rimY) { // rim보다 위(=넘침 후보)
+        const d = (rimY - y);
+        overSum += d;
+        if (y < overMinY) { overMinY = y; overX = x; }
+      }
+    }
+    
+    // overflowAmt: 넘친 정도(픽셀 기반)
+    overflowAmt = overSum / (N+1);
+    overflowX = overX;
+    
+    // 넘치면 레벨을 줄인다(=흘러나감/마셔짐)
+    // 계수는 튜닝 포인트: 0.00035~0.0010 정도가 보통
+    if (overflowAmt > 0.5 && drink.level > 0.06) {
+      const k = 0.00075; // <-- 여기 튜닝
+      drink.targetLevel = Math.max(0.05, drink.targetLevel - overflowAmt * k);
+    }
+    
+        
     // 3) toppings: gravity tilt로만 (표면 회전과 독립)
     const gX = -tiltLR * 0.55;
     const gY = 0.22;
@@ -495,6 +550,7 @@
 </script>
 </body>
 </html>
+
 
 
 
