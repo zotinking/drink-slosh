@@ -408,7 +408,7 @@
     
     // --- 실제 drain: hold가 어느 정도 쌓인 뒤에만 ---
     if (overflowHold > 0.35 && drink.level > 0.06) {
-      const k = 0.001; // ✅ 기존보다 약간 낮게 시작(0.00035~0.0012)
+      const k = 0.002; // ✅ 기존보다 약간 낮게 시작(0.00035~0.0012)
       drink.targetLevel = Math.max(0.05, drink.targetLevel - overflowAmt * k);
     }
     dbg_overflowHold = overflowHold;
@@ -600,5 +600,6 @@
 </script>
 </body>
 </html>
+
 
 
