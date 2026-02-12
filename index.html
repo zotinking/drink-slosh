@@ -356,13 +356,18 @@
     drink.level += (drink.targetLevel - drink.level) * (1 - Math.pow(0.0008, dt));
 
     // 3) toppings: gravity tilt로만 (표면 회전과 독립)
-    const gX = tiltLR * 0.55;
+    const gX = -tiltLR * 0.55;
     const gY = 0.22;
 
     const topY = cup.y - cup.h/2;
     const botY = cup.y + cup.h/2;
     const liquidTop = botY - cup.h * drink.level;
 
+    const onFloor = (p.y >= (botY - cup.wall*0.8 - p.r - 0.5));
+    if (onFloor) {
+      p.vx *= 0.88; // 바닥 마찰(0.85~0.93)
+    }
+    
     for (const p of toppings){
       p.vx += gX;
       p.vy += gY;
@@ -489,4 +494,5 @@
 </script>
 </body>
 </html>
+
 
