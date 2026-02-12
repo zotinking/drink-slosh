@@ -340,7 +340,7 @@
   // ---------- update ----------
   function update(dt){
     // 1) surface angle target: -yaw (요구사항 그대로)
-    const targetTheta = -yawRad; // CW phone -> CCW surface
+    const targetTheta = +yawRad; // CW phone -> CCW surface
     const err = wrapRad(targetTheta - surfaceTheta);
     // spring smoothing
     surfaceThetaVel += err * thetaStiff * dt;
@@ -489,3 +489,4 @@
 </script>
 </body>
 </html>
+
