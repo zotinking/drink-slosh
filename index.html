@@ -27,16 +27,9 @@
   const canvas = document.getElementById("gl");
 
   function say(msg){ hud.textContent = msg; }
+  window.addEventListener("error", (e) => say("ERROR ❌\n" + (e.message || "unknown error")));
+  window.addEventListener("unhandledrejection", (e) => say("PROMISE ERROR ❌\n" + (e.reason?.message || String(e.reason))));
 
-  // 1) 전역 에러를 화면에 표시
-  window.addEventListener("error", (e) => {
-    say("ERROR ❌\n" + (e.message || "unknown error"));
-  });
-  window.addEventListener("unhandledrejection", (e) => {
-    say("PROMISE ERROR ❌\n" + (e.reason?.message || String(e.reason)));
-  });
-
-  // 2) 캔버스 크기/배경 확실히 보이게
   function resize(){
     const dpr = window.devicePixelRatio || 1;
     canvas.width  = Math.max(1, Math.floor(innerWidth  * dpr));
@@ -45,31 +38,118 @@
   addEventListener("resize", resize);
   resize();
 
-  // 3) WebGL 컨텍스트 획득 여부 표시
   const gl = canvas.getContext("webgl", {alpha:false, antialias:false});
-  if(!gl){
-    say("LOADED ✅\n하지만 WebGL 컨텍스트를 만들지 못했어요.\n(iOS 설정/콘텐츠 차단/저전력 모드 등 확인)");
-    return;
+  if(!gl){ say("LOADED ✅\nWebGL 컨텍스트 실패"); return; }
+
+  // ---- shader: 큰 원형 파티클 ----
+  const vs = `
+  attribute vec2 aPos;
+  uniform float uPointSize;
+  void main(){
+    gl_Position = vec4(aPos, 0.0, 1.0);   // aPos는 이미 clip space(-1..1)
+    gl_PointSize = uPointSize;
+  }`;
+  const fs = `
+  precision mediump float;
+  uniform vec4 uColor;
+  void main(){
+    vec2 p = gl_PointCoord - vec2(0.5);
+    float d = length(p);
+    if(d > 0.5) discard;                  // 원으로 자르기
+    // 중심은 더 진하게(살짝 그라데이션)
+    float a = smoothstep(0.5, 0.1, d) * uColor.a;
+    gl_FragColor = vec4(uColor.rgb, a);
+  }`;
+
+  function compile(type, src){
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)){
+      throw new Error(gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+  const prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vs));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(prog);
+  if(!gl.getProgramParameter(prog, gl.LINK_STATUS)){
+    throw new Error(gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  const aPos = gl.getAttribLocation(prog, "aPos");
+  const uPointSize = gl.getUniformLocation(prog, "uPointSize");
+  const uColor = gl.getUniformLocation(prog, "uColor");
+
+  // ---- particles (clip space -1..1) ----
+  const N = 300;
+  const pos = new Float32Array(N * 2);
+  const vel = new Float32Array(N * 2);
+
+  for(let i=0;i<N;i++){
+    pos[i*2]   = (Math.random()*1.6 - 0.8); // -0.8..0.8
+    pos[i*2+1] = (Math.random()*1.2 - 0.6); // -0.6..0.6
+    vel[i*2]   = (Math.random()*0.4 - 0.2);
+    vel[i*2+1] = (Math.random()*0.4 - 0.2);
   }
 
-  // 4) 아주 단순한 “움직이는 화면” 만들기: clearColor가 계속 변하면 로딩 OK
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  // 블롭 느낌(겹치면 진해지도록)
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // additive
+
   let t0 = performance.now();
   function loop(now){
-    const t = (now - t0) / 1000;
-
-    // 배경색이 계속 변하면 “실행 중”이 눈으로 확인됨
-    const r = 0.2 + 0.2*Math.sin(t*1.3);
-    const g = 0.2 + 0.2*Math.sin(t*1.7 + 1.0);
-    const b = 0.2 + 0.2*Math.sin(t*2.1 + 2.0);
-
+    const t = (now - t0)/1000;
     gl.viewport(0,0,canvas.width,canvas.height);
-    gl.clearColor(r,g,b,1);
+
+    // 배경
+    gl.clearColor(0.07,0.08,0.10,1);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    // HUD도 계속 갱신(프레임이 돌고 있음을 확인)
-    say("LOADED ✅ WebGL OK\n" +
-        `canvas: ${canvas.width}×${canvas.height}\n` +
-        `time: ${t.toFixed(2)}s`);
+    // 업데이트
+    const dt = 1/60;
+    const ax = 0.0;
+    const ay = -0.18; // 위로 갈수록 y가 커지는 clip space라서 "아래"는 음수 방향
+
+    for(let i=0;i<N;i++){
+      let x = pos[i*2], y = pos[i*2+1];
+      let vx = vel[i*2], vy = vel[i*2+1];
+
+      vx += ax * dt;
+      vy += ay * dt;
+      vx *= 0.995;
+      vy *= 0.995;
+
+      x += vx * dt * 2.5;
+      y += vy * dt * 2.5;
+
+      // 화면 경계 튕김
+      if(x < -0.95){ x=-0.95; vx*=-0.85; }
+      if(x >  0.95){ x= 0.95; vx*=-0.85; }
+      if(y < -0.95){ y=-0.95; vy*=-0.85; }
+      if(y >  0.95){ y= 0.95; vy*=-0.85; }
+
+      pos[i*2]=x; pos[i*2+1]=y;
+      vel[i*2]=vx; vel[i*2+1]=vy;
+    }
+
+    // 그리기
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, pos, gl.DYNAMIC_DRAW);
+
+    gl.uniform1f(uPointSize, Math.max(10, Math.min(34, canvas.width/35)));
+    gl.uniform4f(uColor, 0.82, 0.55, 0.45, 0.35);
+
+    gl.drawArrays(gl.POINTS, 0, N);
+
+    say(`STAGE 1 ✅ particles visible\nN=${N}  t=${t.toFixed(2)}s\n(보이면 다음 단계로 진행)`);
 
     requestAnimationFrame(loop);
   }
@@ -78,3 +158,4 @@
 </script>
 </body>
 </html>
+
