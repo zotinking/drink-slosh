@@ -28,7 +28,7 @@
   <div class="topbar">
     <div>
       <div class="title">Drink Slosh (iOS Test)</div>
-      <div class="hint">Play → 모션 권한. 폰을 화면 수직축으로 시계방향 회전하면 표면은 반시계방향으로 동일각 회전(지면 수평 유지).</div>
+      <div class="hint">Play → 모션 권한. 폰을 화면 수직축으로 회전하면 표면이 반대로 회전해(지면 수평 유지). 넘치면 실제로 줄어듭니다.</div>
     </div>
     <button id="playBtn" class="btn">Play</button>
   </div>
@@ -38,9 +38,9 @@
   </div>
 
   <div class="footer">
+    <span class="pill">yaw(각도): 표면 각도</span>
     <span class="pill">중력(기울기): 토핑 이동</span>
-    <span class="pill">yaw(각도): 표면 각도 = -yaw</span>
-    <span class="pill">Play는 권한/오디오 트리거</span>
+    <span class="pill">넘침: 레벨 감소</span>
   </div>
 </div>
 
@@ -63,11 +63,9 @@
   const TOPPING_COUNT = 38;
 
   // ---------- utils ----------
-  const TAU = Math.PI * 2;
   function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
   function rgba(c,a){ return `rgba(${c.r},${c.g},${c.b},${a})`; }
   function wrapRad(x){
-    // wrap to [-pi, pi]
     x = (x + Math.PI) % (Math.PI*2);
     if (x < 0) x += Math.PI*2;
     return x - Math.PI;
@@ -95,17 +93,21 @@
   let tiltFB = 0; // -1..1
   let hasMotion = false;
 
-  // Yaw angle (for surface): use DeviceOrientation alpha with baseline offset
-  let yaw0 = null;          // baseline alpha(rad) at Play
-  let yawRad = 0;           // current yaw relative to yaw0 (rad)
-  let surfaceTheta = 0;     // actual used surface direction angle (rad)
-  let surfaceThetaVel = 0;  // smoothing
-  const thetaStiff = 18.0;  // spring stiffness
-  const thetaDamp  = 0.82;  // damping
+  // Yaw angle (for surface): DeviceOrientation alpha with baseline offset
+  let yaw0 = null;
+  let yawRad = 0;
+
+  // Surface theta (smoothed)
+  let surfaceTheta = 0;
+  let surfaceThetaVel = 0;
+  const thetaStiff = 18.0;
+  const thetaDamp  = 0.82;
 
   // wave
   let wavePhase = 0;
   let waveAmp = 0;
+
+  // overflow
   let overflowX = null;
   let overflowAmt = 0;
 
@@ -122,11 +124,10 @@
   }
 
   function handleOrientation(e){
-    // alpha: 0..360 degrees (yaw-ish)
     if (typeof e.alpha !== "number") return;
     const a = degToRad(e.alpha);
 
-    if (yaw0 === null) yaw0 = a; // capture baseline after Play
+    if (yaw0 === null) yaw0 = a;  // baseline after Play
     yawRad = wrapRad(a - yaw0);
   }
 
@@ -202,7 +203,6 @@
     ctx.restore();
   }
 
-  // 핵심: 각도 기반 표면(0~90°에서도 안정)
   function drawLiquid(){
     const topY = cup.y - cup.h/2;
     const botY = cup.y + cup.h/2;
@@ -222,35 +222,25 @@
 
     ctx.fillStyle = rgba(drink.color, 0.92);
 
-    // 표면 "방향" 각도 theta:
-    // 요구사항: phone CW +90 => surface CCW +90 => surfaceTheta = -yaw
     const theta = surfaceTheta;
-
-    // direction vector along surface line
-    const dx = Math.cos(theta);
-    const dy = Math.sin(theta);
-    // normal vector (perpendicular)
-    const nx = -dy;
-    const ny = dx;
+    const dx = Math.cos(theta), dy = Math.sin(theta);
+    const nx = -dy, ny = dx;
 
     const amp = 12 + 22 * waveAmp;
     const midX = cup.x;
     const midY = liquidTop;
 
-    // choose length enough to span the cup; clip will cut it
     const span = Math.max(cup.topW, cup.h) * 0.9;
-
     const N = 44;
+
     ctx.beginPath();
     for (let i=0;i<=N;i++){
-      const t = i / N;                 // 0..1
-      const s = (t - 0.5) * 2 * span;  // -span..+span
+      const t = i / N;
+      const s = (t - 0.5) * 2 * span;
 
-      // base point on the line
       let x = midX + dx * s;
       let y = midY + dy * s;
 
-      // wave offset along normal direction
       const w = Math.sin(wavePhase + t*2.6) * amp;
       x += nx * w;
       y += ny * w;
@@ -259,13 +249,11 @@
       else ctx.lineTo(x, y);
     }
 
-    // close far down so it fills "below surface" regardless of angle
     ctx.lineTo(W + 1000, botY + 3000);
     ctx.lineTo(-1000, botY + 3000);
     ctx.closePath();
     ctx.fill();
 
-    // highlight along same curve
     ctx.strokeStyle = "rgba(255,255,255,0.35)";
     ctx.lineWidth = 6;
     ctx.beginPath();
@@ -285,7 +273,6 @@
     }
     ctx.stroke();
 
-    // shine overlay
     const grad = ctx.createLinearGradient(cup.x - 200, topY, cup.x + 220, botY);
     grad.addColorStop(0, "rgba(255,255,255,0.10)");
     grad.addColorStop(0.5, "rgba(255,255,255,0.00)");
@@ -341,81 +328,72 @@
 
   // ---------- update ----------
   function update(dt){
-    // 1) surface angle target: -yaw (요구사항 그대로)
-    const targetTheta = +yawRad; // CW phone -> CCW surface
+    // shared vertical bounds
+    const topY = cup.y - cup.h/2;
+    const botY = cup.y + cup.h/2;
+
+    // 1) surface angle target: (당신이 방향 맞춘 값)
+    const targetTheta = +yawRad;
     const err = wrapRad(targetTheta - surfaceTheta);
-    // spring smoothing
+
     surfaceThetaVel += err * thetaStiff * dt;
     surfaceThetaVel *= Math.pow(thetaDamp, dt*60);
     surfaceTheta += surfaceThetaVel * dt;
     surfaceTheta = wrapRad(surfaceTheta);
 
-    // wave: 조금만
     wavePhase += 2.0 * dt;
     waveAmp = clamp(waveAmp * 0.92 + Math.min(1, Math.abs(surfaceThetaVel) * 0.8), 0, 1);
 
-    // 2) level (테스트용: 감소 없음)
-    drink.level += (drink.targetLevel - drink.level) * (1 - Math.pow(0.0008, dt));
-
-
-    // --- overflow detection + drain (mouth open) ---
-    const topY = cup.y - cup.h/2;
-    const botY = cup.y + cup.h/2;
-    
-    // "입구(림) 기준 높이" : 너무 위/아래면 튜닝하세요(약간 아래가 자연스러움)
+    // 2) overflow detection + drain (mouth open)
     const rimY = topY + cup.wall * 0.9;
-    
-    // 표면 곡선을 샘플링해서 rimY 보다 위로 올라간 부분이 있으면 overflowAmt 증가
+
     const theta = surfaceTheta;
     const dx = Math.cos(theta), dy = Math.sin(theta);
     const nx = -dy, ny = dx;
-    
+
     const midX = cup.x;
     const midY = botY - cup.h * drink.level;
-    
+
     const span = Math.max(cup.topW, cup.h) * 0.9;
     const N = 40;
-    
+
+    const amp = 12 + 22 * waveAmp;
+
     let overSum = 0;
     let overMinY = Infinity;
     let overX = null;
-    
+
     for (let i=0;i<=N;i++){
       const t = i / N;
       const s = (t - 0.5) * 2 * span;
-    
-      // drawLiquid과 동일한 표면 위치 계산(파형은 여기선 단순화/또는 wavePhase 사용)
-      const amp = 12 + 22 * waveAmp;
+
       const w = Math.sin(wavePhase + t*2.6) * amp;
-    
+
       const x = midX + dx*s + nx*w;
       const y = midY + dy*s + ny*w;
-    
-      if (y < rimY) { // rim보다 위(=넘침 후보)
+
+      if (y < rimY) {
         const d = (rimY - y);
         overSum += d;
         if (y < overMinY) { overMinY = y; overX = x; }
       }
     }
-    
-    // overflowAmt: 넘친 정도(픽셀 기반)
+
     overflowAmt = overSum / (N+1);
     overflowX = overX;
-    
-    // 넘치면 레벨을 줄인다(=흘러나감/마셔짐)
-    // 계수는 튜닝 포인트: 0.00035~0.0010 정도가 보통
+
     if (overflowAmt > 0.5 && drink.level > 0.06) {
-      const k = 0.00075; // <-- 여기 튜닝
+      const k = 0.00075; // 튜닝(0.00035~0.0012)
       drink.targetLevel = Math.max(0.05, drink.targetLevel - overflowAmt * k);
     }
-    
-        
-    // 3) toppings: gravity tilt로만 (표면 회전과 독립)
-    const gX = -tiltLR * 0.55;
+
+    // 3) level smoothing
+    drink.level += (drink.targetLevel - drink.level) * (1 - Math.pow(0.0008, dt));
+
+    // 4) toppings physics (gravity tilt only)
+    const gX = -tiltLR * 0.55; // 방향 반대로 느껴지면 +로 바꾸기
     const gY = 0.22;
 
-    const topY = cup.y - cup.h/2;
-    const botY = cup.y + cup.h/2;
     const liquidTop = botY - cup.h * drink.level;
 
     for (const p of toppings){
@@ -427,23 +405,27 @@
 
       p.x += p.vx;
       p.y += p.vy;
-      
+
+      // floor collision
       if (p.y > botY - cup.wall*0.8 - p.r){
         p.y = botY - cup.wall*0.8 - p.r;
         p.vy *= -0.35;
         p.vx *= 0.85;
       }
 
+      // extra floor friction (after floor collision)
       const onFloor = (p.y >= (botY - cup.wall*0.8 - p.r - 0.5));
       if (onFloor) {
-        p.vx *= 0.88; // 바닥 마찰(0.85~0.93)
+        p.vx *= 0.88; // 0.85~0.93
       }
-      
+
+      // top clamp
       if (p.y < topY + cup.wall*1.4 + p.r){
         p.y = topY + cup.wall*1.4 + p.r;
         p.vy *= -0.20;
       }
 
+      // side walls
       const bounds = cupXBoundsAt(p.y);
       const left = bounds.left + cup.wall*1.0 + p.r;
       const right = bounds.right - cup.wall*1.0 - p.r;
@@ -451,6 +433,7 @@
       if (p.x < left){ p.x = left; p.vx *= -0.35; }
       if (p.x > right){ p.x = right; p.vx *= -0.35; }
 
+      // buoyancy-ish
       if (p.y < liquidTop + 30){
         p.vy += 0.6;
       }
@@ -460,7 +443,6 @@
   function render(){
     ctx.clearRect(0,0,W,H);
 
-    // background glow
     ctx.save();
     const bg = ctx.createRadialGradient(cx, cy-200, 40, cx, cy, 820);
     bg.addColorStop(0, "rgba(80,120,255,0.10)");
@@ -474,15 +456,14 @@
     drawToppings();
     drawCup();
 
-    // status
     ctx.save();
     ctx.fillStyle = "rgba(255,255,255,0.75)";
     ctx.font = "24px -apple-system, system-ui, Segoe UI, Roboto, sans-serif";
-    ctx.fillText(hasMotion ? "기울여 보세요 (토핑 이동)" : "Play 후 모션 허용 필요", 40, 64);
+    ctx.fillText(hasMotion ? "기울여 보세요 (토핑 이동 / 넘침=레벨 감소)" : "Play 후 모션 허용 필요", 40, 64);
 
     ctx.fillStyle = "rgba(255,255,255,0.55)";
     ctx.font = "20px -apple-system, system-ui, Segoe UI, Roboto, sans-serif";
-    ctx.fillText(`레벨: ${Math.round(drink.level*100)}% | yaw: ${Math.round(yawRad*180/Math.PI)}° | surface: ${Math.round(surfaceTheta*180/Math.PI)}°`, 40, 96);
+    ctx.fillText(`레벨: ${Math.round(drink.level*100)}% | yaw: ${Math.round(yawRad*180/Math.PI)}° | surface: ${Math.round(surfaceTheta*180/Math.PI)}° | overflow: ${overflowAmt.toFixed(1)}`, 40, 96);
     ctx.restore();
   }
 
@@ -521,11 +502,9 @@
       if (!ok) alert("모션 권한이 거부되어 일부 동작이 제한됩니다.");
     } catch(e){}
 
-    // listen both: motion(for gravity) + orientation(for yaw angle)
     window.addEventListener("devicemotion", handleMotion, true);
     window.addEventListener("deviceorientation", handleOrientation, true);
 
-    // reset yaw baseline at start
     yaw0 = null;
     yawRad = 0;
     surfaceTheta = 0;
@@ -533,7 +512,11 @@
 
     drink.level = 0.78;
     drink.targetLevel = 0.78;
+
     waveAmp = 0;
+    overflowAmt = 0;
+    overflowX = null;
+
     resetToppings();
     hasMotion = false;
 
@@ -550,7 +533,3 @@
 </script>
 </body>
 </html>
-
-
-
-
