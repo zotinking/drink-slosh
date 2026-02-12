@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>Drink Slosh (Test)</title>
+  <title>Drink Slosh (iOS Test)</title>
   <style>
     html, body { margin:0; padding:0; height:100%; background:#0b0f14; color:#e8eef6; font-family: -apple-system, system-ui, Segoe UI, Roboto, sans-serif; }
     .wrap { height:100%; display:flex; flex-direction:column; }
@@ -34,7 +34,7 @@
   <div class="topbar">
     <div>
       <div class="title">Drink Slosh (iOS Test)</div>
-      <div class="hint">Play를 누르면 모션 권한을 요청하고, 기울이면 출렁이며 마실 수 있어요.</div>
+      <div class="hint">Play를 누르면 모션 권한을 요청하고, 실제로 기울이면 출렁이며 마실 수 있어요. (yaw 회전에는 거의 반응하지 않음)</div>
     </div>
     <button id="playBtn" class="btn">Play</button>
   </div>
@@ -44,7 +44,7 @@
   </div>
 
   <div class="footer">
-    <span class="pill">기울이기: 슬로싱</span>
+    <span class="pill">좌/우·앞/뒤 기울이기: 슬로싱</span>
     <span class="pill">앞으로 많이 기울이기: 마시기</span>
     <span class="pill">Play는 권한/오디오 트리거</span>
   </div>
@@ -55,7 +55,7 @@
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
 
-  // ---- Scene params (tuned for iPhone 14 Pro-ish) ----
+  // ---- Scene params ----
   const W = canvas.width, H = canvas.height;
   const cx = W/2, cy = H/2;
 
@@ -66,11 +66,11 @@
     rim: 26, wall: 18
   };
 
-  // Drink preset (like "Drink mode" but auto-filled)
+  // Drink preset (auto-filled)
   const drink = {
     color: { r: 207, g: 126, b: 111 }, // milk-tea-ish
-    level: 0.78, // 0..1 (1 full)
-    targetLevel: 0.78
+    level: 0.78,       // current 0..1
+    targetLevel: 0.78  // target 0..1
   };
 
   // Topping particles
@@ -92,31 +92,37 @@
   }
   resetToppings();
 
-  // ---- Motion input ----
-  // We'll derive a single tilt value that influences surface angle + "sip" trigger.
-  let tiltLR = 0;   // left-right (-1..1)
-  let tiltFB = 0;   // front-back (-1..1)
+  // ---- Motion input (gravity-based: devicemotion) ----
+  let tiltLR = 0;   // left-right  (-1..1)
+  let tiltFB = 0;   // front-back  (-1..1)
   let hasMotion = false;
 
   function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
 
-  function handleOrientation(e){
-    // iOS Safari: beta (front-back), gamma (left-right)
-    // Normalize by ~45 degrees
-    const g = (typeof e.gamma === 'number') ? e.gamma : 0;
-    const b = (typeof e.beta  === 'number') ? e.beta  : 0;
-    tiltLR = clamp(g / 45, -1, 1);
-    tiltFB = clamp(b / 45, -1, 1);
+  // Use accelerationIncludingGravity so yaw(z-axis) rotation does NOT change tilt much.
+  function handleMotion(e){
+    const g = e.accelerationIncludingGravity;
+    if (!g) return;
+
+    const gx = (typeof g.x === "number") ? g.x : 0;
+    const gy = (typeof g.y === "number") ? g.y : 0;
+
+    // NOTE:
+    // - These signs are chosen to feel intuitive in portrait.
+    // - If 좌/우가 반대로 느껴지면 tiltLR 부호만 바꾸면 됩니다.
+    tiltLR = clamp((-gx) / 9.81, -1, 1);
+    tiltFB = clamp((gy) / 9.81, -1, 1);
+
     hasMotion = true;
   }
 
   // ---- Slosh model (spring + damping) ----
-  let surfaceAngle = 0;   // radians-ish but we'll keep small
+  let surfaceAngle = 0;   // small scalar representing slope
   let surfaceVel   = 0;
   const stiffness = 0.09;
   const damping   = 0.88;
 
-  // Secondary wave for more "liquid" feel
+  // Secondary wave
   let wavePhase = 0;
   let waveAmp = 0;
 
@@ -150,7 +156,7 @@
     osc.stop(t0 + 0.25);
   }
 
-  // ---- Utilities: cup shape + inside test ----
+  // ---- Utilities: cup shape ----
   function cupWidthAt(y){
     // y: 0..cup.h from top to bottom
     const t = clamp(y / cup.h, 0, 1);
@@ -168,7 +174,6 @@
     const botY = cup.y + cup.h/2;
     if (y < topY || y > botY) return false;
     const b = cupXBoundsAt(y);
-    // add small margin inside walls
     const margin = cup.wall*0.55;
     return (x > b.left + margin && x < b.right - margin);
   }
@@ -180,21 +185,16 @@
     const topY = cup.y - cup.h/2;
     const botY = cup.y + cup.h/2;
 
-    // Outer cup
     ctx.save();
     ctx.lineWidth = cup.wall;
     ctx.strokeStyle = "rgba(240,248,255,0.85)";
     ctx.fillStyle = "rgba(255,255,255,0.06)";
 
     ctx.beginPath();
-    // Left side
     ctx.moveTo(cup.x - cup.topW/2, topY);
     ctx.lineTo(cup.x - cup.botW/2, botY);
-    // Bottom curve
     ctx.quadraticCurveTo(cup.x, botY + 30, cup.x + cup.botW/2, botY);
-    // Right side
     ctx.lineTo(cup.x + cup.topW/2, topY);
-    // Rim
     ctx.quadraticCurveTo(cup.x, topY - 20, cup.x - cup.topW/2, topY);
     ctx.closePath();
     ctx.fill();
@@ -227,34 +227,48 @@
     ctx.closePath();
     ctx.clip();
 
-    // Liquid fill
+    // --- Liquid fill (surface-shaped polygon) ---
     ctx.fillStyle = rgba(drink.color, 0.92);
-    ctx.beginPath();
-    ctx.rect(0, liquidTop, W, botY - liquidTop + 200);
-    ctx.fill();
 
-    // Surface (slosh) - curved line
-    // surfaceAngle controls slope; wave adds ripple.
-    const slope = surfaceAngle * 0.9; // small
+    const slope = surfaceAngle * 0.9;
     const surfaceMidY = liquidTop;
-    const halfW = cupXBoundsAt(surfaceMidY).right - cupXBoundsAt(surfaceMidY).left;
     const amp = 16 + 26*waveAmp;
 
     const leftX  = cupXBoundsAt(surfaceMidY).left + cup.wall*0.6;
     const rightX = cupXBoundsAt(surfaceMidY).right - cup.wall*0.6;
 
-    const leftY  = surfaceMidY + slope * (-(rightX-leftX)/2) + Math.sin(wavePhase) * amp;
-    const rightY = surfaceMidY + slope * ((rightX-leftX)/2) + Math.sin(wavePhase + 1.7) * amp;
-    const midY   = surfaceMidY + Math.sin(wavePhase + 0.9) * (amp*0.6);
+    const N = 36;
+    ctx.beginPath();
+    for (let i=0;i<=N;i++){
+      const t = i / N;
+      const x = leftX + (rightX - leftX) * t;
+      const wave = Math.sin(wavePhase + t*2.2) * amp;
+      const y = surfaceMidY + slope * (x - (leftX+rightX)/2) + wave;
 
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.lineTo(rightX, botY + 200);
+    ctx.lineTo(leftX,  botY + 200);
+    ctx.closePath();
+    ctx.fill();
+
+    // Surface highlight (same curve)
     ctx.strokeStyle = "rgba(255,255,255,0.35)";
     ctx.lineWidth = 6;
     ctx.beginPath();
-    ctx.moveTo(leftX, leftY);
-    ctx.quadraticCurveTo((leftX+rightX)/2, midY, rightX, rightY);
+    for (let i=0;i<=N;i++){
+      const t = i / N;
+      const x = leftX + (rightX - leftX) * t;
+      const wave = Math.sin(wavePhase + t*2.2) * amp;
+      const y = surfaceMidY + slope * (x - (leftX+rightX)/2) + wave;
+
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
     ctx.stroke();
 
-    // Shiny gradient overlay
+    // Shiny overlay
     const grad = ctx.createLinearGradient(cup.x - 200, topY, cup.x + 220, botY);
     grad.addColorStop(0, "rgba(255,255,255,0.10)");
     grad.addColorStop(0.5, "rgba(255,255,255,0.00)");
@@ -266,17 +280,13 @@
   }
 
   function drawToppings(){
-    const topY = cup.y - cup.h/2;
     const botY = cup.y + cup.h/2;
+    const liquidTop = botY - cup.h * drink.level;
 
-    // For visual stacking: draw "jelly" behind then "boba"
     const sorted = [...toppings].sort((a,b)=> (a.kind==="jelly") - (b.kind==="jelly"));
 
     for (const p of sorted){
-      // only draw if inside cup and below liquid surface
       if (!insideCup(p.x, p.y)) continue;
-      // cull above liquid top a bit
-      const liquidTop = botY - cup.h * drink.level;
       if (p.y < liquidTop - 40) continue;
 
       ctx.beginPath();
@@ -284,7 +294,7 @@
         ctx.fillStyle = "rgba(35,20,18,0.95)";
         ctx.ellipse(p.x, p.y, p.r, p.r*0.95, 0, 0, Math.PI*2);
         ctx.fill();
-        // highlight
+
         ctx.fillStyle = "rgba(255,255,255,0.20)";
         ctx.beginPath();
         ctx.ellipse(p.x - p.r*0.25, p.y - p.r*0.25, p.r*0.35, p.r*0.25, -0.5, 0, Math.PI*2);
@@ -297,7 +307,7 @@
     }
   }
 
-  // Polyfill for roundRect in older contexts
+  // roundRect polyfill
   if (!CanvasRenderingContext2D.prototype.roundRect) {
     CanvasRenderingContext2D.prototype.roundRect = function(x,y,w,h,r){
       const rr = Math.min(r, w/2, h/2);
@@ -314,20 +324,19 @@
 
   // ---- Physics update ----
   function update(dt){
-    // Slosh target: use left-right tilt primarily for surface slope.
-    const target = tiltLR * 0.55; // small number
+    // Slosh target: use left-right tilt for surface slope.
+    const target = tiltLR * 0.55;
 
     const force = (target - surfaceAngle) * stiffness;
     surfaceVel += force;
     surfaceVel *= damping;
     surfaceAngle += surfaceVel;
 
-    // wave responds to tilt changes
     wavePhase += 2.1 * dt;
     waveAmp = clamp(waveAmp * 0.94 + Math.abs(surfaceVel) * 2.2, 0, 1);
 
-    // Sip: tilt forward (negative pitch = tip toward mouth in many holds, but can vary)
-    // We'll treat tiltFB < -0.55 as "sip".
+    // Sip: forward tilt.
+    // Depending on how you hold the phone, this sign may need flipping.
     const sipNow = (tiltFB < -0.55);
     if (sipCooldown > 0) sipCooldown -= dt;
 
@@ -339,25 +348,24 @@
       if (audioCtx && Math.random() < 0.08) beepSip(0.6 + 0.4*sipStrength);
     } else {
       sipStrength = Math.max(0, sipStrength - dt*2.0);
-      // small recovery toward last target (no refill)
     }
 
-    // Smoothly approach target level
+    // Smooth approach target level
     drink.level += (drink.targetLevel - drink.level) * (1 - Math.pow(0.0008, dt));
 
-    // Toppings: simple pseudo-physics
-    const gX = tiltLR * 0.50; // sideways gravity
-    const gY = 0.22;          // downward gravity
+    // Toppings physics
+    const gX = tiltLR * 0.50;
+    const gY = 0.22;
+
     const topY = cup.y - cup.h/2;
     const botY = cup.y + cup.h/2;
     const liquidTop = botY - cup.h * drink.level;
 
     for (const p of toppings){
-      // Apply gravity & damping
       p.vx += gX;
       p.vy += gY;
 
-      // Extra drift with slosh (makes it feel "liquid")
+      // slosh drift
       p.vx += surfaceVel * 0.9;
 
       p.vx *= 0.96;
@@ -366,18 +374,19 @@
       p.x += p.vx;
       p.y += p.vy;
 
-      // Keep within cup bounds (simple collision)
+      // bottom collision
       if (p.y > botY - cup.wall*0.8 - p.r){
         p.y = botY - cup.wall*0.8 - p.r;
         p.vy *= -0.35;
         p.vx *= 0.85;
       }
+      // top clamp
       if (p.y < topY + cup.wall*1.4 + p.r){
         p.y = topY + cup.wall*1.4 + p.r;
         p.vy *= -0.20;
       }
 
-      // Side walls based on width at y
+      // side walls
       const bounds = cupXBoundsAt(p.y);
       const left = bounds.left + cup.wall*1.0 + p.r;
       const right = bounds.right - cup.wall*1.0 - p.r;
@@ -391,9 +400,8 @@
         p.vx *= -0.35;
       }
 
-      // Buoyancy-ish: keep toppings roughly within liquid (optional)
+      // buoyancy-ish: keep near liquid
       if (p.y < liquidTop + 30){
-        // push it down a bit if it's too high above the liquid
         p.vy += 0.6;
       }
     }
@@ -420,7 +428,7 @@
     ctx.save();
     ctx.fillStyle = "rgba(255,255,255,0.75)";
     ctx.font = "24px -apple-system, system-ui, Segoe UI, Roboto, sans-serif";
-    const msg1 = hasMotion ? "기울여 보세요 (슬로싱)" : "Play 후 기울기 센서 허용 필요";
+    const msg1 = hasMotion ? "기울여 보세요 (슬로싱)" : "Play 후 모션 허용 필요";
     ctx.fillText(msg1, 40, 64);
 
     ctx.fillStyle = "rgba(255,255,255,0.55)";
@@ -449,13 +457,18 @@
 
   // ---- Permission / start ----
   async function requestMotion(){
-    // iOS Safari may require requestPermission()
-    if (typeof DeviceOrientationEvent !== "undefined" &&
-        typeof DeviceOrientationEvent.requestPermission === "function") {
-      const res = await DeviceOrientationEvent.requestPermission();
-      return res === "granted";
-    }
-    return true; // browsers that don't require it
+    // iOS Safari may require requestPermission (either orientation or motion)
+    const DOE = window.DeviceOrientationEvent;
+    const DME = window.DeviceMotionEvent;
+
+    const fn = (DOE && typeof DOE.requestPermission === "function") ? DOE.requestPermission
+           : (DME && typeof DME.requestPermission === "function") ? DME.requestPermission
+           : null;
+
+    if (!fn) return true;
+
+    const res = await fn.call(DOE || DME);
+    return res === "granted";
   }
 
   async function start(){
@@ -472,13 +485,13 @@
         alert("모션 권한이 거부되어 기울기 입력이 안 됩니다. (설정에서 허용 필요)");
       }
     }catch(err){
-      // If requestPermission isn't available or fails, we still try to listen.
+      // still attempt to listen
     }
 
-    // Attach listeners
-    window.addEventListener("deviceorientation", handleOrientation, true);
+    // Attach listener (gravity-based)
+    window.addEventListener("devicemotion", handleMotion, true);
 
-    // Reset state (auto-filled drink preset)
+    // Reset state
     drink.level = 0.78;
     drink.targetLevel = 0.78;
     surfaceAngle = 0;
@@ -486,14 +499,15 @@
     waveAmp = 0;
     sipCooldown = 0.2;
     resetToppings();
+    hasMotion = false;
 
-    // Start animation if not started
+    // Start animation once
     if (!start._started){
       start._started = true;
       requestAnimationFrame(loop);
     }
 
-    // brief beep to confirm audio works
+    // brief beep to confirm audio
     beepSip(0.2);
   }
 
