@@ -1,0 +1,173 @@
+:root {
+  --bg-a: #2e2925;
+  --bg-b: #a16c45;
+  --bg-c: #ddb071;
+  --ui-gold: #ffe960;
+  --ui-gold-border: #d28b2b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+}
+
+body {
+  background:
+    radial-gradient(26% 22% at 20% 34%, rgba(253, 217, 122, 0.46), transparent 70%),
+    radial-gradient(31% 22% at 74% 15%, rgba(252, 203, 131, 0.45), transparent 70%),
+    radial-gradient(42% 30% at 62% 56%, rgba(10, 33, 51, 0.53), transparent 70%),
+    linear-gradient(160deg, var(--bg-a), var(--bg-b) 54%, var(--bg-c));
+}
+
+.app {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+#sim {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  padding: max(18px, env(safe-area-inset-top)) 12px 18px;
+  pointer-events: none;
+}
+
+.top-controls {
+  width: min(100%, 540px);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 62px 1fr 62px;
+  align-items: start;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.side-column {
+  display: grid;
+  gap: 10px;
+}
+
+.circle-btn {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 3px solid var(--ui-gold-border);
+  background: radial-gradient(circle at 32% 26%, #fff98e 0, #fae655 38%, #efc53f 100%);
+  color: #bb6f25;
+  font-size: 22px;
+  font-weight: 700;
+  box-shadow: inset 0 2px 3px rgba(255, 255, 255, 0.65), 0 3px 8px rgba(0, 0, 0, 0.28);
+}
+
+.action-btn {
+  font-size: 13px;
+  letter-spacing: 0.3px;
+}
+
+.action-btn.active {
+  background: radial-gradient(circle at 32% 26%, #fffe9b 0, #ffd650 38%, #ff9f2c 100%);
+}
+
+.nozzle-row {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  padding-top: 1px;
+}
+
+.nozzle-btn {
+  width: 80px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  display: grid;
+  justify-items: center;
+  gap: 0;
+}
+
+.nozzle-head {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  position: relative;
+  background: radial-gradient(circle at 26% 20%, #fefefe 0%, #919292 34%, #24292f 58%, #9fa3a5 80%, #21252a 100%);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.34);
+}
+
+.nozzle-core {
+  position: relative;
+  margin-top: -60px;
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: var(--core);
+  border: 2px solid rgba(255, 255, 255, 0.72);
+}
+
+.nozzle-neck {
+  margin-top: -1px;
+  width: 30px;
+  height: 20px;
+  border-radius: 0 0 8px 8px;
+  background: linear-gradient(90deg, #3f4245, #bdc2c8, #34393e);
+}
+
+.nozzle-btn.active .nozzle-head {
+  box-shadow: 0 0 0 2px rgba(255, 229, 122, 0.85), 0 4px 8px rgba(0, 0, 0, 0.34);
+}
+
+.status {
+  width: min(100%, 540px);
+  margin: 10px auto 0;
+  pointer-events: none;
+}
+
+#stats {
+  margin: 0;
+  color: rgba(255, 243, 222, 0.95);
+  font-size: 12px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+@media (max-width: 420px) {
+  .top-controls {
+    grid-template-columns: 56px 1fr 56px;
+    gap: 6px;
+  }
+
+  .circle-btn {
+    width: 50px;
+    height: 50px;
+  }
+
+  .nozzle-btn {
+    width: 74px;
+  }
+
+  .nozzle-head {
+    width: 66px;
+    height: 66px;
+  }
+
+  .nozzle-core {
+    width: 50px;
+    height: 50px;
+    margin-top: -55px;
+  }
+}
