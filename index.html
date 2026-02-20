@@ -1,250 +1,52 @@
 <!doctype html>
 <html lang="ko">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
-<title>WebGL Blob Stage</title>
-<style>
-html,body{margin:0;height:100%;background:#0b0f14;}
-#gl{
-  position:absolute;
-  inset:0;
-  width:100%;
-  height:100%;
-}
-#hud{
-  position:fixed;
-  left:12px;top:12px;
-  padding:10px 14px;
-  background:rgba(0,0,0,0.55);
-  color:#fff;
-  border-radius:12px;
-  font:600 14px -apple-system,system-ui;
-  z-index:10;
-}
-</style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <title>Slush Cup Fluid Demo</title>
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-<div id="hud">Initializing...</div>
-<canvas id="gl"></canvas>
+  <main class="app">
+    <canvas id="sim"></canvas>
 
-<script>
-(() => {
+    <section class="overlay" aria-label="controls">
+      <div class="top-controls">
+        <div class="side-column">
+          <button id="resetBtn" class="circle-btn" type="button" aria-label="reset">↻</button>
+          <button class="circle-btn" type="button" aria-label="mix">◍</button>
+        </div>
 
-const hud = document.getElementById("hud");
-const canvas = document.getElementById("gl");
-const gl = canvas.getContext("webgl",{alpha:false,antialias:false});
+        <div class="nozzle-row">
+          <button class="nozzle-btn active" type="button" data-color="#3b7f72" aria-label="green nozzle">
+            <span class="nozzle-head"></span>
+            <span class="nozzle-core" style="--core:#3b7f72"></span>
+            <span class="nozzle-neck"></span>
+          </button>
+          <button class="nozzle-btn" type="button" data-color="#f0f0f2" aria-label="white nozzle">
+            <span class="nozzle-head"></span>
+            <span class="nozzle-core" style="--core:#f0f0f2"></span>
+            <span class="nozzle-neck"></span>
+          </button>
+          <button class="nozzle-btn" type="button" data-color="#f1ab62" aria-label="orange nozzle">
+            <span class="nozzle-head"></span>
+            <span class="nozzle-core" style="--core:#f1ab62"></span>
+            <span class="nozzle-neck"></span>
+          </button>
+        </div>
 
-function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+        <div class="side-column">
+          <button id="pourToggle" class="circle-btn action-btn" type="button" aria-label="pour">POUR</button>
+          <button id="tiltToggle" class="circle-btn action-btn" type="button" aria-label="tilt">TILT</button>
+        </div>
+      </div>
 
-function resize(){
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = innerWidth * dpr;
-  canvas.height = innerHeight * dpr;
-  gl.viewport(0,0,canvas.width,canvas.height);
-}
-addEventListener("resize",resize);
-resize();
+      <div class="status">
+        <p id="stats">particles: 0</p>
+      </div>
+    </section>
+  </main>
 
-if(!gl){
-  hud.textContent="WebGL 실패 ❌";
-  return;
-}
-
-// ===================
-// Shader
-// ===================
-const vs = `
-attribute vec2 aPos;
-uniform float uSize;
-void main(){
-  gl_Position = vec4(aPos,0.0,1.0);
-  gl_PointSize = uSize;
-}`;
-
-const fs = `
-precision mediump float;
-uniform vec4 uColor;
-void main(){
-  vec2 p = gl_PointCoord - vec2(0.5);
-  float d = length(p);
-  if(d>0.5) discard;
-  float alpha = smoothstep(0.5,0.05,d) * uColor.a;
-  gl_FragColor = vec4(uColor.rgb, alpha);
-}`;
-
-function compile(type,src){
-  const s = gl.createShader(type);
-  gl.shaderSource(s,src);
-  gl.compileShader(s);
-  return s;
-}
-
-const prog = gl.createProgram();
-gl.attachShader(prog,compile(gl.VERTEX_SHADER,vs));
-gl.attachShader(prog,compile(gl.FRAGMENT_SHADER,fs));
-gl.linkProgram(prog);
-gl.useProgram(prog);
-
-const aPos = gl.getAttribLocation(prog,"aPos");
-const uSize = gl.getUniformLocation(prog,"uSize");
-const uColor = gl.getUniformLocation(prog,"uColor");
-
-const buf = gl.createBuffer();
-gl.bindBuffer(gl.ARRAY_BUFFER,buf);
-gl.enableVertexAttribArray(aPos);
-gl.vertexAttribPointer(aPos,2,gl.FLOAT,false,0,0);
-
-gl.enable(gl.BLEND);
-gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
-
-// ===================
-// Particles
-// ===================
-const N = 900;
-const pos = new Float32Array(N*2);
-const vel = new Float32Array(N*2);
-
-for(let i=0;i<N;i++){
-  pos[i*2]   = Math.random()*1.4 - 0.7;
-  pos[i*2+1] = Math.random()*1.2 - 0.6;
-  vel[i*2]   = 0;
-  vel[i*2+1] = 0;
-}
-
-// ===================
-// Uniform Grid
-// ===================
-const cellSize = 0.12;
-const gridW = Math.ceil(2/cellSize);
-const gridH = Math.ceil(2/cellSize);
-const head = new Int32Array(gridW*gridH);
-const next = new Int32Array(N);
-
-function gridIndex(x,y){
-  const ix = clamp(Math.floor((x+1)/cellSize),0,gridW-1);
-  const iy = clamp(Math.floor((y+1)/cellSize),0,gridH-1);
-  return iy*gridW+ix;
-}
-
-// ===================
-// Physics
-// ===================
-let last = performance.now();
-
-function loop(now){
-
-  const dt = Math.min(0.033,(now-last)/1000);
-  last = now;
-
-  gl.clearColor(0.06,0.08,0.10,1);
-  gl.clear(gl.COLOR_BUFFER_BIT);
-
-  // Build grid
-  head.fill(-1);
-  for(let i=0;i<N;i++){
-    const gi = gridIndex(pos[i*2],pos[i*2+1]);
-    next[i] = head[gi];
-    head[gi] = i;
-  }
-
-  const cohR=0.22;
-  const sepR=0.06;
-  const cohK=0.55;
-  const sepK=1.4;
-  const maxF=2.0;
-
-  for(let i=0;i<N;i++){
-
-    let x = pos[i*2];
-    let y = pos[i*2+1];
-    let vx = vel[i*2];
-    let vy = vel[i*2+1];
-
-    let ax=0, ay=0;
-    let cx=0, cy=0, cnt=0;
-
-    const gi0 = gridIndex(x,y);
-    const gx0 = gi0 % gridW;
-    const gy0 = (gi0 / gridW)|0;
-
-    for(let oy=-1;oy<=1;oy++){
-      for(let ox=-1;ox<=1;ox++){
-        const gx = gx0+ox;
-        const gy = gy0+oy;
-        if(gx<0||gx>=gridW||gy<0||gy>=gridH) continue;
-
-        let j = head[gy*gridW+gx];
-        while(j!=-1){
-          if(j!=i){
-            const dx = pos[j*2]-x;
-            const dy = pos[j*2+1]-y;
-            const d2 = dx*dx+dy*dy;
-
-            if(d2 < cohR*cohR){
-              cx+=pos[j*2];
-              cy+=pos[j*2+1];
-              cnt++;
-            }
-
-            if(d2>1e-6 && d2 < sepR*sepR){
-              const d=Math.sqrt(d2);
-              const push=(sepR-d)/sepR;
-              ax -= (dx/d)*push*sepK;
-              ay -= (dy/d)*push*sepK;
-            }
-          }
-          j=next[j];
-        }
-      }
-    }
-
-    if(cnt>0){
-      const mx=cx/cnt;
-      const my=cy/cnt;
-      ax += (mx-x)*cohK;
-      ay += (my-y)*cohK;
-    }
-
-    ax=clamp(ax,-maxF,maxF);
-    ay=clamp(ay,-maxF,maxF);
-
-    vx+=ax*dt*0.6;
-    vy+=ay*dt*0.6;
-
-    vx*=0.995;
-    vy*=0.995;
-
-    x+=vx*dt*2.5;
-    y+=vy*dt*2.5;
-
-    if(x<-0.95){x=-0.95;vx*=-0.85;}
-    if(x>0.95){x=0.95;vx*=-0.85;}
-    if(y<-0.95){y=-0.95;vy*=-0.85;}
-    if(y>0.95){y=0.95;vy*=-0.85;}
-
-    pos[i*2]=x;
-    pos[i*2+1]=y;
-    vel[i*2]=vx;
-    vel[i*2+1]=vy;
-  }
-
-  gl.bindBuffer(gl.ARRAY_BUFFER,buf);
-  gl.bufferData(gl.ARRAY_BUFFER,pos,gl.DYNAMIC_DRAW);
-
-  gl.uniform1f(uSize, Math.max(24, Math.min(70, canvas.width/18)));
-  gl.uniform4f(uColor, 0.82,0.55,0.45,0.18);
-
-  gl.drawArrays(gl.POINTS,0,N);
-
-  hud.textContent="Blob Simulation ✅  (응집+분리 적용)";
-
-  requestAnimationFrame(loop);
-}
-
-requestAnimationFrame(loop);
-
-})();
-</script>
+  <script src="app.js?v=20260219-19"></script>
 </body>
 </html>
